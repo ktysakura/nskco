@@ -7,30 +7,30 @@
 #define unlikely(x) __builtin_expect(!!x, 0)
 
 typedef struct nsk_timer_event_s nsk_timer_event_t;
-typedef nsk_queue_node_t         nsk_timer_event_node_t;
-typedef nsk_queue_t              nsk_timer_wheel_queue_t;
+typedef nsk_queue_node_t nsk_timer_event_node_t;
+typedef nsk_queue_t nsk_timer_wheel_queue_t;
 typedef struct nsk_timer_wheel_s nsk_timer_wheel_t;
 
-typedef int (*timeout_handler_s)(nsk_timer_event_t *);
+typedef int (*timeout_handler_s)(void *);
 typedef timeout_handler_s timeout_handler_t;
 
 struct nsk_timer_event_s {
-    uint64_t               expired_time;
-    timeout_handler_t      handler;
-    void *                 arg;
+    uint64_t expired_time;
+    timeout_handler_t handler;
+    void *arg;
     nsk_timer_event_node_t timer_node;
-    uint8_t                has_time_out;
-    uint8_t                cancel;
-    uint16_t               ref;
-    uint16_t               level;
+    uint8_t has_time_out;
+    uint8_t cancel;
+    uint16_t ref;
+    uint16_t level;
 };
 
-#define TIMER_LOCK(priv_data)                                                                           \
+#define NSK_TIMER_LOCK(priv_data)                                                                       \
     if (likely(!priv_data->thread_safe)) {                                                              \
         pthread_spin_lock(&(priv_data->locker));                                                        \
     }
 
-#define TIMER_UNLOCK(priv_data)                                                                         \
+#define NSK_TIMER_UNLOCK(priv_data)                                                                     \
     if (likely(!priv_data->thread_safe)) {                                                              \
         pthread_spin_unlock(&(priv_data->locker));                                                      \
     }
@@ -51,17 +51,12 @@ nsk_timer_event_t *
 nsk_timer_wheel_get_timer(nsk_timer_event_node_t *node);
 
 int
-nsk_timer_wheel_join(nsk_timer_wheel_t *      T,
-                     nsk_timer_wheel_queue_t *active,
-                     nsk_timer_wheel_queue_t *expired);
-
-void
-nsk_timer_wheel_dispatch_list(nsk_timer_wheel_t *T, nsk_timer_wheel_queue_t *active);
+nsk_timer_wheel_get_wait_time_ms(nsk_timer_wheel_t *T);
 
 void
 nsk_timer_wheel_update_time(nsk_timer_wheel_t *T);
 
 int
-nsk_timer_wheel_expect_timeout_queue(nsk_timer_wheel_t *T, nsk_queue_t *timeout);
+nsk_timer_wheel_dispatch(nsk_timer_wheel_t *T);
 
 #endif

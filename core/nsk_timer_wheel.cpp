@@ -1,4 +1,5 @@
 #include "nsk_timer_wheel.h"
+#include "nsk_alloc.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -8,18 +9,19 @@
 #include <sys/time.h>
 
 struct nsk_timer_wheel_s {
-    uint16_t           near_slot_size;
-    uint16_t           slot_size;
-    nsk_queue_t *      near;
-    nsk_queue_t **     slots;
-    nsk_queue_t        timeout;
-    uint16_t           level;
-    uint32_t           time_scale;
-    uint64_t           start_time_point;
-    uint64_t           current_point;
-    uint64_t           timer_tick;
+    uint16_t near_slot_size;
+    uint16_t slot_size;
+    nsk_queue_t *near;
+    nsk_queue_t **slots;
+    nsk_queue_t timeout;
+    nsk_queue_t safe_timeout;
+    uint16_t level;
+    uint32_t time_scale;
+    uint64_t start_time_point;
+    uint64_t current_point;
+    uint64_t timer_tick;
     pthread_spinlock_t locker;
-    uint8_t            thread_safe;
+    uint8_t thread_safe;
 };
 
 #define TIME_NEAR_SHIFT 8
@@ -28,7 +30,7 @@ struct nsk_timer_wheel_s {
 #define TIME_LEVEL (1 << TIME_LEVEL_SHIFT)
 #define TIME_NEAR_MASK (TIME_NEAR - 1)
 #define TIME_LEVEL_MASK (TIME_LEVEL - 1)
-#define TIMER_CACHE_ALIGNMENT 16
+#define NSK_ALGINMENT 16
 static const uint64_t kDefaultNearSlotSize = 60 * 1000;
 
 uint64_t
@@ -51,8 +53,8 @@ gettime(int scale) {
 nsk_timer_wheel_t *
 nsk_timer_wheel_create(uint16_t level, uint16_t time_scale, uint8_t thread_safe) {
     nsk_timer_wheel_t *T;
-    int                i, j;
-    int                ret = 0;
+    int i, j;
+    int ret = 0;
 
     if (level != 1 && level != 5) {
         errno = EINVAL;
@@ -64,7 +66,7 @@ nsk_timer_wheel_create(uint16_t level, uint16_t time_scale, uint8_t thread_safe)
         return NULL;
     }
 
-    ret = posix_memalign((void **)&T, TIMER_CACHE_ALIGNMENT, sizeof(nsk_timer_wheel_t));
+    T = (nsk_timer_wheel_t *)nsk_memalign(NSK_ALGINMENT, sizeof(nsk_timer_wheel_t));
     if (ret != 0) {
         errno = ENOMEM;
         return NULL;
@@ -85,9 +87,9 @@ nsk_timer_wheel_create(uint16_t level, uint16_t time_scale, uint8_t thread_safe)
     }
 
     nsk_queue_init(&T->timeout);
-
-    ret = posix_memalign((void **)&T->near, TIMER_CACHE_ALIGNMENT,
-                         sizeof(nsk_timer_wheel_queue_t) * T->near_slot_size);
+    nsk_queue_init(&T->safe_timeout);
+    T->near = (nsk_timer_wheel_queue_t *)nsk_memalign(
+        NSK_ALGINMENT, sizeof(nsk_timer_wheel_queue_t) * T->near_slot_size);
 
     for (i = 0; i < T->near_slot_size; i++) {
         nsk_queue_init(&T->near[i]);
@@ -98,8 +100,8 @@ nsk_timer_wheel_create(uint16_t level, uint16_t time_scale, uint8_t thread_safe)
     }
 
     if (T->level != 1) {
-        ret = posix_memalign((void **)&T->slots, TIMER_CACHE_ALIGNMENT,
-                             sizeof(nsk_timer_wheel_queue_t *) * (T->level - 1));
+        T->slots = (nsk_timer_wheel_queue_t **)nsk_memalign(
+            NSK_ALGINMENT, sizeof(nsk_timer_wheel_queue_t *) * (T->level - 1));
         if (ret != 0) {
             errno = ENOMEM;
             return NULL;
@@ -107,8 +109,8 @@ nsk_timer_wheel_create(uint16_t level, uint16_t time_scale, uint8_t thread_safe)
     }
 
     for (i = 0; i < (T->level - 1); i++) {
-        posix_memalign((void **)&T->slots[i], TIMER_CACHE_ALIGNMENT,
-                       sizeof(nsk_timer_wheel_queue_t) * TIME_LEVEL);
+        T->slots[i] = (nsk_timer_wheel_queue_t *)nsk_memalign(
+            NSK_ALGINMENT, sizeof(nsk_timer_wheel_queue_t) * TIME_LEVEL);
     }
 
     for (i = 0; i < (T->level - 1); i++) {
@@ -149,7 +151,7 @@ nsk_timer_wheel_add_node(nsk_timer_wheel_t *T, nsk_timer_event_t *event) {
     if (T->level == 1 || (time | TIME_NEAR_MASK) == (T->timer_tick | TIME_NEAR_MASK)) {
         nsk_queue_insert_tail(&T->near[time % T->near_slot_size], &event->timer_node);
     } else {
-        int      level;
+        int level;
         uint32_t mask = (TIME_NEAR << TIME_LEVEL_SHIFT);
         // ignore low bit, only compare high bit
         for (level = 0; level < T->level - 1; level++) {
@@ -170,14 +172,16 @@ nsk_timer_wheel_add_node(nsk_timer_wheel_t *T, nsk_timer_event_t *event) {
 
 static nsk_timer_event_t *
 nsk_timer_wheel_add_timer_inner(nsk_timer_wheel_t *T,
-                                uint64_t           timeout,
-                                timeout_handler_t  handler,
-                                void *             arg) {
-    nsk_timer_event_t *event = (nsk_timer_event_t *)calloc(sizeof(nsk_timer_event_t), 1);
-    uint64_t           diff = timeout - T->timer_tick;
+                                uint64_t timeout,
+                                timeout_handler_t handler,
+                                void *arg) {
+    nsk_timer_event_t *event = (nsk_timer_event_t *)nsk_calloc(sizeof(nsk_timer_event_t));
+    uint64_t diff = timeout - T->timer_tick;
 
     if (T->level == 1 && diff >= T->near_slot_size) {
-        printf("CO_ERR: nsk_timer_wheel_add_timer_inner line %d diff=%lu > %lu \n", __LINE__, diff,
+        printf("CO_ERR: nsk_timer_wheel_add_timer_inner line %d diff=%lu > %lu \n",
+               __LINE__,
+               diff,
                kDefaultNearSlotSize);
         diff = T->near_slot_size - 1;
     }
@@ -207,13 +211,14 @@ nsk_timer_wheel_add_timer(nsk_timer_wheel_t *T, uint64_t timeout, timeout_handle
 int
 nsk_timer_wheel_cancel_timer(nsk_timer_wheel_t *T, nsk_timer_event_t **node) {
     (*node)->cancel = 1;
-    (*node)->has_time_out = true;
     (*node)->ref--;
-    TIMER_LOCK(T);
-    nsk_queue_remove(&(*node)->timer_node);
-    TIMER_UNLOCK(T);
-    free(*node);
-    *node = NULL;
+    if ((*node)->ref == 0) {
+        NSK_TIMER_LOCK(T);
+        nsk_queue_remove(&(*node)->timer_node);
+        nsk_pfree(*node);
+        NSK_TIMER_UNLOCK(T);
+    }
+
     return 0;
 }
 
@@ -224,8 +229,8 @@ nsk_timer_wheel_get_timer(nsk_timer_event_node_t *node) {
 
 int
 nsk_timer_wheel_move_list(nsk_timer_wheel_t *T, uint16_t level, uint16_t slot_idx) {
-    nsk_queue_t *      queue = &T->slots[level][slot_idx];
-    nsk_queue_t *      node;
+    nsk_queue_t *queue = &T->slots[level][slot_idx];
+    nsk_queue_t *node;
     nsk_timer_event_t *data;
 
     while (!nsk_queue_empty(queue)) {
@@ -238,9 +243,14 @@ nsk_timer_wheel_move_list(nsk_timer_wheel_t *T, uint16_t level, uint16_t slot_id
     return 0;
 }
 
+int
+nsk_timer_wheel_get_wait_time_ms(nsk_timer_wheel_t *T) {
+    return 1000 / (T->time_scale);
+}
+
 static void
 nsk_timer_wheel_shift(nsk_timer_wheel_t *T) {
-    int      mask = TIME_NEAR;
+    int mask = TIME_NEAR;
     uint64_t ct = ++T->timer_tick;
 
     if (T->level == 1) {
@@ -269,39 +279,34 @@ nsk_timer_wheel_shift(nsk_timer_wheel_t *T) {
 }
 
 void
-nsk_timer_wheel_dispatch_list(nsk_timer_wheel_t *T, nsk_timer_wheel_queue_t *active) {
-    nsk_timer_event_node_t *node = nsk_queue_head(active);
-    nsk_timer_event_t *     event;
-    int                     next_delay;
+nsk_timer_wheel_dispatch_inner(nsk_timer_wheel_queue_t *timeout) {
+    nsk_timer_event_node_t *node;
+    nsk_timer_event_t *event;
+    int next_delay;
 
-    while (node != nsk_queue_sentinel(active)) {
+    while (!nsk_queue_empty(timeout)) {
+
+        node = nsk_queue_head(timeout);
+        nsk_queue_remove(node);
         event = nsk_queue_data(node, nsk_timer_event_t, timer_node);
-        node = nsk_queue_next(node);
 
-        if (!event->has_time_out && event->cancel == 0) {
-            next_delay = event->handler(event);
-        }
-
-        event->has_time_out = true;
-        event->ref--;
-        event->cancel = 1;
-
-        if (event->ref == 0) {
-            free(event);
+        if (!event->has_time_out && event->cancel == 0 && event->ref > 0) {
+            event->has_time_out = 1;
+            next_delay = event->handler(event->arg);
         }
     }
 }
 
 void
 nsk_timer_wheel_update_queue_inner(nsk_timer_wheel_t *T) {
-    TIMER_LOCK(T);
+    NSK_TIMER_LOCK(T);
     nsk_timer_wheel_queue_t *near;
     near = &T->near[T->timer_tick % T->near_slot_size];
     nsk_queue_merge(&T->timeout, near);
     nsk_timer_wheel_shift(T);
     near = &T->near[T->timer_tick % T->near_slot_size];
     nsk_queue_merge(&T->timeout, near);
-    TIMER_UNLOCK(T);
+    NSK_TIMER_UNLOCK(T);
 }
 
 void
@@ -312,21 +317,22 @@ nsk_timer_wheel_update_time(nsk_timer_wheel_t *T) {
         uint64_t diff = cp - T->start_time_point;
         T->start_time_point = cp;
         T->current_point += diff;
-        for (int i = 0; i < diff; i++) {
+        for (uint64_t i = 0; i < diff; i++) {
             nsk_timer_wheel_update_queue_inner(T);
         }
     }
 }
 
 int
-nsk_timer_wheel_expect_timeout_queue(nsk_timer_wheel_t *T, nsk_queue_t *timeout) {
+nsk_timer_wheel_dispatch(nsk_timer_wheel_t *T) {
     nsk_timer_wheel_update_time(T);
     if (!nsk_queue_empty(&T->timeout)) {
-        TIMER_LOCK(T);
+        NSK_TIMER_LOCK(T);
         if (!nsk_queue_empty(&T->timeout)) {
-            nsk_queue_move_head(&T->timeout, timeout);
+            nsk_queue_move_head(&T->timeout, &T->safe_timeout);
         }
-        TIMER_UNLOCK(T);
+        NSK_TIMER_UNLOCK(T);
     }
+    nsk_timer_wheel_dispatch_inner(&T->safe_timeout);
     return 0;
 }

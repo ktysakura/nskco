@@ -1,22 +1,23 @@
 #if !defined(__NSK_COROUTINE_H_)
 #define __NSK_COROUTINE_H_
+#include <poll.h>
 #include <string.h>
 
-typedef struct nsk_coroutine_s      nsk_coroutine_t;
+typedef struct nsk_coroutine_s nsk_coroutine_t;
 typedef struct nsk_coroutine_attr_s nsk_coroutine_attr_t;
-typedef struct nsk_stack_mem_s      nsk_stack_mem_t;
-typedef struct nsk_share_stack_s    nsk_share_stack_t;
-typedef struct nsk_coroutine_env_s  nsk_coroutine_env_t;
+typedef struct nsk_stack_mem_s nsk_stack_mem_t;
+typedef struct nsk_share_stack_s nsk_share_stack_t;
+typedef struct nsk_coroutine_env_s nsk_coroutine_env_t;
 typedef struct nsk_coroutine_spec_s nsk_coroutine_spec_t;
-typedef struct nsk_coroutine_ctx_s  nsk_coroutine_ctx_t;
+typedef struct nsk_coroutine_ctx_s nsk_coroutine_ctx_t;
 typedef void *(*nsk_coroutine_pfn_t)(void *);
 
+#define kDefaultMaxFD (1024 * 1024)
 #define kDefaultCoStackSize (128 * 1024)
 #define kDefaultCoStackLimitSize (kDefaultCoStackSize * 1024)
-#define NSK_ALGINMENT_SIZE 16
 
 struct nsk_coroutine_attr_s {
-    size_t             stack_size;
+    size_t stack_size;
     nsk_share_stack_t *share_memory;
     nsk_coroutine_attr_s() {
         stack_size = kDefaultCoStackSize;
@@ -45,10 +46,16 @@ typedef enum {
 } nsk_coroutine_status_e;
 
 int
-nsk_coroutine_create(nsk_coroutine_t **          co,
+nsk_coroutine_create(nsk_coroutine_t **co,
                      const nsk_coroutine_attr_t *attr,
                      void *(*start_routine)(void *),
                      void *arg);
+
+nsk_coroutine_t *
+nsk_get_current_thread_co();
+
+void
+nsk_coroutine_release(nsk_coroutine_t *co);
 
 void
 nsk_coroutine_resume(nsk_coroutine_t *co);
@@ -61,4 +68,13 @@ nsk_coroutine_yield(nsk_coroutine_t *co);
 
 void
 nsk_coroutine_yield_env(nsk_coroutine_env_t *env);
+
+void
+nsk_co_enable_sys_hook();
+
+void
+nsk_co_disable_sys_hook();
+
+int
+nsk_co_is_enable_sys_hook();
 #endif // DEBUG

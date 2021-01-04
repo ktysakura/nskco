@@ -10,10 +10,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 include_directories(
 	core
 )
-
 # 第三方库
-set(LIBS colib pthread dl)
-
+set(LIBS pthread dl)
+add_definitions(-g -O0 -Wall) 
 subdirs(
 	core
 	sample

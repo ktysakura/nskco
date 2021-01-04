@@ -1,10 +1,7 @@
+#include "nsk_timer_wheel.h"
 #include <cstdint>
 #include <iostream>
 #include <iostream>
-#include <libco/co_routine.h>
-#include <libco/co_routine_inner.h>
-#include <libco/co_routine_specific.h>
-#include <nsk_timer_wheel.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdio.h>
@@ -13,37 +10,13 @@
 #include <unordered_map>
 using namespace std;
 
-struct stRoutineArgs_t {
-    stCoRoutine_t *co;
-    int            routine_id;
-};
-
-struct stRoutineSpecificData_t {
-    int idx;
-};
-
-CO_ROUTINE_SPECIFIC(stRoutineSpecificData_t, __routine);
-
-void *
-RoutineFunc(void *args) {
-    co_enable_hook_sys();
-    stRoutineArgs_t *routine_args = (stRoutineArgs_t *)args;
-    __routine->idx = routine_args->routine_id;
-    while (true) {
-        printf("%s:%d routine specific data idx %d\n", __func__, __LINE__, __routine->idx);
-        poll(NULL, 0, 3000);
-    }
-
-    return NULL;
-}
-
 struct scheduler_t {
     nsk_queue_t defer_queue;
     nsk_queue_t ready_queue;
 };
 
 struct coroutine_t {
-    int              value;
+    int value;
     nsk_queue_node_t defer;
     nsk_queue_node_t ready;
 };
@@ -100,8 +73,8 @@ test_link_list() {
 }
 
 int
-hello_world(nsk_timer_event_t *node) {
-    printf("hello world msec = %lu\n", node->expired_time);
+hello_world(void *node) {
+    printf("hello world msec\n");
     return 0;
 }
 
@@ -120,18 +93,10 @@ test_time_wheel() {
     node = nsk_timer_wheel_add_timer(T, 4000, hello_world, NULL);
     node = nsk_timer_wheel_add_timer(T, 1500, hello_world, NULL);
     node = nsk_timer_wheel_add_timer(T, 3000, hello_world, NULL);
-    // nsk_timer_wheel_cancel_timer(T, &node);
+     nsk_timer_wheel_cancel_timer(T, &node);
     nsk_timer_wheel_queue_t timeout;
     nsk_queue_init(&timeout);
     for (;;) {
-        nsk_timer_wheel_expect_timeout_queue(T, &timeout);
-        usleep(2500);
-        while (!nsk_queue_empty(&timeout)) {
-            nsk_timer_event_node_t *p = nsk_queue_head(&timeout);
-            nsk_queue_remove(p);
-            nsk_timer_event_t *event = nsk_timer_wheel_get_timer(p);
-            event->handler(event);
-        }
     }
     nsk_timer_wheel_destroy(T);
 }
